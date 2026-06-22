@@ -3,17 +3,13 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from google import genai
 from sentence_transformers import SentenceTransformer, util
+from data import courses
 
 load_dotenv()
 client=genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
-snippets = ["MATH 136 is Linear Algebra 1. Many students find the proofs challenging.",
-    "CS 234 covers data structures and algorithms, taught in C.",
-    "STAT 230 is an introductory probability course, considered fairly difficult.",
-    "MATH 237 is Calculus 3, focusing on multivariable calculus.",
-    "MUSIC 140 is a popular elective, often taken as an easy GPA booster.",
-    ]
+snippets = [course["text"] for course in courses]
 
 snippet_vectors = model.encode(snippets)
 
