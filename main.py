@@ -1,42 +1,193 @@
 import os
+import re
+from typing import List, Optional
 from dotenv import load_dotenv
 from fastapi import FastAPI
+from pydantic import BaseModel
 from google import genai
 from sentence_transformers import SentenceTransformer, util
 from supabase import create_client
+from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
-client=genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-model = SentenceTransformer("all-MiniLM-L6-v2")
 
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+model = SentenceTransformer("all-MiniLM-L6-v2")
 supabase = create_client(
     os.getenv("SUPABASE_URL"),
     os.getenv("SUPABASE_KEY")
 )
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# Request body: the new question plus the conversation so far.
+class Turn(BaseModel):
+    question: str
+    answer: str
+
+
+class AskRequest(BaseModel):
+    question: str
+    history: Optional[List[Turn]] = None
+
+
+GREETING_TRIGGERS = [
+    "hi", "hello", "hey", "yo", "help",
+    "what can you do", "what can i ask", "who are you", "what is this",
+    "what are you", "what do you do", "what subjects", "what courses",
+    "im a uw student", "i am a uw student", "im a student", "i am a student",
+]
+
+# Words that signal a real course question even when no code is typed.
+COURSE_WORDS = re.compile(
+    r'\b(course|courses|class|classes|hard|easy|harder|easier|difficult|difficulty|'
+    r'take|taking|took|prereq|prerequisite|prof|professor|exam|exams|midterm|final|'
+    r'assignment|workload|enroll|stream|advanced|enriched|recommend|worth|'
+    r'math|cs|stat|stats|calc|calculus|algebra|combinatorics|probability|logic|'
+    r'linear|compiler|proof|proofs)\b',
+    re.IGNORECASE
+)
+
+
+def is_greeting(q: str) -> bool:
+    ql = q.lower().strip("?!. ")
+    # Must START with a trigger (or be exactly one) so "damn you are cool" won't match.
+    return any(ql == t or ql.startswith(t + " ") for t in GREETING_TRIGGERS)
+
+
+def normalize_query(q: str) -> str:
+    q = q.replace("-", " ")
+    q = re.sub(r'([A-Za-z]+)\s*(\d+)', r'\1 \2', q)
+    q = re.sub(r'\s+', ' ', q)
+    return q.strip()
+
+
+def find_codes(q: str):
+    matches = re.findall(r'([A-Za-z]{2,4})\s*(\d{3}[A-Za-z]?)', q)
+    return [f"{subj.upper()} {num.upper()}" for subj, num in matches]
+
+
+def looks_like_course_question(q: str) -> bool:
+    # A real course question either names a code or uses a course-y word.
+    return bool(find_codes(normalize_query(q)) or COURSE_WORDS.search(q))
+
 
 @app.post("/ask")
-def ask(question: str):
-    question_vector = model.encode(question).tolist()
+def ask(req: AskRequest):
+    question = req.question
+    history = req.history or []
+
+    # 0) Greeting / "what can I ask" -> friendly intro, skip the RAG pipeline.
+    if is_greeting(question):
+        intro = (
+            "Hey there, Warrior! \U0001FAE1 I'm WatAsk \u2014 I give straight answers about "
+            "Waterloo courses: how hard they are, what they cover, and what students "
+            "actually say on UWFlow.\n\n"
+            "Right now I know about 33 core first- and second-year courses:\n"
+            "\u2022 MATH \u2014 135, 136, 137, 138, 127, 128, 145, 146, 147, 148, 235, 245, 237, 247, 239\n"
+            "\u2022 CS \u2014 115, 116, 135, 145, 136, 136L, 146, 240, 241, 241E, 245, 245E, 246, 246E\n"
+            "\u2022 STAT \u2014 230, 231, 240, 241\n\n"
+            "Try asking things like \"is MATH 239 hard?\", \"should I take CS 245 or 245E?\", "
+            "or \"which Calc 3 should I take?\""
+        )
+        return {"question": question, "answer": intro, "source_codes": [], "sources": []}
+
+    # 0b) Not a greeting and not a course question -> it's chit-chat / off-topic.
+    #     Give a friendly nudge instead of a fake course answer. (Skip this if
+    #     we're mid-conversation, since short follow-ups may lack course words.)
+    if not history and not looks_like_course_question(question):
+        return {
+            "question": question,
+            "answer": (
+                "Appreciate it! \U0001F60A I'm best at course questions though \u2014 "
+                "try asking me about a specific Waterloo course, like \"is MATH 239 hard?\" "
+                "or \"should I take CS 245 or 245E?\""
+            ),
+            "source_codes": [],
+            "sources": [],
+        }
+
+    clean_question = normalize_query(question)
+
+    # 1) Build the SEARCH query. On a follow-up, a bare question like
+    #    "what about the advanced version?" embeds poorly on its own, so we
+    #    prepend the previous question to give retrieval enough context.
+    if history:
+        search_text = normalize_query(history[-1].question) + " " + clean_question
+    else:
+        search_text = clean_question
+
+    question_vector = model.encode(search_text).tolist()
     result = supabase.rpc("match_courses", {
-        "query_embedding" : question_vector,
-        "match_count":2
+        "query_embedding": question_vector,
+        "match_count": 4
     }).execute()
 
-    retrieved = [row["text"] for row in result.data]
+    sources = []
+    seen_codes = set()
+    for row in result.data:
+        code = row.get("code")
+        if code and code not in seen_codes:
+            sources.append({"code": code, "text": row["text"]})
+            seen_codes.add(code)
 
-    context = "\n".join(retrieved)
-    prompt = f"""use the following information to answer the student's question.
-Only use the information, and if it doesen't contain the answer,say so.
+    # 2) Direct code lookup for any codes named in the current question.
+    codes = find_codes(clean_question)
+    for code in codes:
+        exact = supabase.table("courses").select("code,text").eq("code", code).execute()
+        for row in exact.data:
+            if row["code"] not in seen_codes:
+                sources.insert(0, {"code": row["code"], "text": row["text"]})
+                seen_codes.add(row["code"])
 
-Information:
+    context = "\n\n".join(s["text"] for s in sources)
+
+    # 3) Build the prior-conversation block so follow-ups have context.
+    convo = ""
+    for turn in history:
+        convo += f"Student: {turn.question}\nWatAsk: {turn.answer}\n\n"
+
+    prompt = f"""You are WatAsk, answering a University of Waterloo student's question about courses.
+Use ONLY the course information provided below. If it doesn't contain the answer, say so plainly.
+Use the conversation so far to understand follow-up questions (e.g. "what about the advanced version?").
+
+When you mention difficulty ratings, translate them into plain language instead of just quoting a percentage.
+For an "easy" rating, phrase it as how students experienced it. For example:
+- around 30% easy -> "most students found it quite hard"
+- around 45-55% easy -> "students were split; many found it moderately challenging"
+- around 70%+ easy -> "most students found it manageable"
+Do the same for "liked" (how well-liked it is) and "useful" (how useful students found it).
+
+Keep the answer to 2-4 sentences, direct and conversational, like a senior student giving honest advice.
+
+Course information:
 {context}
 
-Question: {question}
+Conversation so far:
+{convo if convo else "(none yet)"}
+Current question: {clean_question}
 """
+
     response = client.models.generate_content(
-        model = "gemini-2.5-flash",
-        contents = prompt
+        model="gemini-2.5-flash",
+        contents=prompt
     )
-    return {"question": question, "answer": response.text, "sources":retrieved}
+    answer_text = response.text
+
+    answer_upper = answer_text.upper()
+    mentioned = [s["code"] for s in sources if s["code"].upper() in answer_upper]
+    source_codes = mentioned if mentioned else [s["code"] for s in sources]
+
+    return {
+        "question": question,
+        "answer": answer_text,
+        "source_codes": source_codes,
+        "sources": sources,
+    }

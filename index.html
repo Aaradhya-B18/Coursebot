@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WatAsk — UW course questions, answered</title>
+    <style>
+        :root {
+            --black: #111114;
+            --gold: #FFD54A;
+            --gold-deep: #C9A227;
+            --paper: #FAFAF7;
+            --ink: #1d1d1f;
+            --muted: #6b6b70;
+            --line: #e6e6e0;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: "Georgia", "Times New Roman", serif;
+            background: var(--paper);
+            color: var(--ink);
+            line-height: 1.55;
+            min-height: 100vh;
+        }
+        header {
+            background: var(--black);
+            color: white;
+            padding: 28px 24px;
+            border-bottom: 4px solid var(--gold);
+        }
+        .header-inner {
+            max-width: 680px;
+            margin: 0 auto;
+            display: flex;
+            align-items: baseline;
+            gap: 12px;
+        }
+        header h1 { font-size: 30px; letter-spacing: -0.5px; }
+        header .dot { color: var(--gold); }
+        header .tag {
+            font-family: system-ui, sans-serif;
+            font-size: 12px;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            color: var(--gold);
+            margin-left: auto;
+        }
+        main { max-width: 680px; margin: 0 auto; padding: 48px 24px; }
+        .lede { font-size: 19px; color: var(--muted); margin-bottom: 32px; }
+        .ask-row { display: flex; gap: 10px; }
+        input {
+            flex: 1;
+            padding: 14px 16px;
+            font-size: 17px;
+            font-family: inherit;
+            border: 1.5px solid var(--line);
+            border-radius: 10px;
+            background: white;
+            transition: border-color 0.15s;
+        }
+        input:focus {
+            outline: none;
+            border-color: var(--gold-deep);
+            box-shadow: 0 0 0 3px rgba(201,162,39,0.18);
+        }
+        button.ask {
+            padding: 14px 28px;
+            font-size: 16px;
+            font-family: system-ui, sans-serif;
+            font-weight: 600;
+            color: var(--black);
+            background: var(--gold);
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        button.ask:hover { background: var(--gold-deep); }
+        button.ask:disabled { opacity: 0.55; cursor: default; }
+        .reset-row {
+            margin-top: 14px;
+            display: none;
+        }
+        .reset-row.show { display: block; }
+        button.reset {
+            font-family: system-ui, sans-serif;
+            font-size: 13px;
+            color: var(--muted);
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 0;
+            text-decoration: underline;
+        }
+        button.reset:hover { color: var(--ink); }
+        .thread { margin-top: 24px; }
+        .turn {
+            margin-bottom: 18px;
+        }
+        .turn .q {
+            font-family: system-ui, sans-serif;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--muted);
+            margin-bottom: 8px;
+        }
+        .answer-card {
+            background: white;
+            border: 1px solid var(--line);
+            border-left: 4px solid var(--gold);
+            border-radius: 12px;
+            padding: 24px;
+        }
+        .answer-text { font-size: 18px; white-space: pre-wrap; }
+        .sources {
+            margin-top: 20px;
+            padding-top: 16px;
+            border-top: 1px solid var(--line);
+        }
+        .sources h3 {
+            font-family: system-ui, sans-serif;
+            font-size: 11px;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 10px;
+        }
+        .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+        .chip {
+            font-family: system-ui, sans-serif;
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            color: var(--black);
+            background: var(--gold);
+            border: 1px solid var(--gold-deep);
+            border-radius: 999px;
+            padding: 5px 13px;
+            white-space: nowrap;
+            cursor: pointer;
+            transition: background 0.15s, transform 0.1s;
+        }
+        .chip:hover { background: var(--gold-deep); transform: translateY(-1px); }
+        .thinking { color: var(--muted); font-style: italic; }
+        footer {
+            max-width: 680px;
+            margin: 0 auto;
+            padding: 24px;
+            font-family: system-ui, sans-serif;
+            font-size: 13px;
+            color: var(--muted);
+        }
+        @media (prefers-reduced-motion: reduce) {
+            * { transition: none !important; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="header-inner">
+            <h1>WatAsk<span class="dot">.</span></h1>
+            <span class="tag">University of Waterloo</span>
+        </div>
+    </header>
+
+    <main>
+        <p class="lede">Straight answers about Waterloo courses — difficulty, content, and what students actually say.</p>
+
+        <div class="ask-row">
+            <input id="question" placeholder="e.g. is MATH 136 hard?  (or just say hi)" />
+            <button class="ask" id="askBtn" onclick="ask()">Ask</button>
+        </div>
+        <div class="reset-row" id="resetRow">
+            <button class="reset" onclick="resetThread()">＋ New question (clear conversation)</button>
+        </div>
+
+        <div class="thread" id="thread"></div>
+    </main>
+
+    <footer>
+        WatAsk is a student project and not affiliated with the University of Waterloo.
+    </footer>
+
+    <script>
+        const API = "http://localhost:8000";
+        let history = [];   // [{question, answer}, ...] for the current thread
+
+        function resetThread() {
+            history = [];
+            document.getElementById("thread").innerHTML = "";
+            document.getElementById("resetRow").classList.remove("show");
+            document.getElementById("question").value = "";
+            document.getElementById("question").focus();
+        }
+
+        async function ask(preset) {
+            const input = document.getElementById("question");
+            if (preset) input.value = preset;
+            const question = input.value.trim();
+            if (!question) return;
+
+            const btn = document.getElementById("askBtn");
+            const thread = document.getElementById("thread");
+
+            // Build this turn's card with a "thinking" placeholder.
+            const turn = document.createElement("div");
+            turn.className = "turn";
+            turn.innerHTML =
+                '<div class="q">' + escapeHtml(question) + '</div>' +
+                '<div class="answer-card">' +
+                    '<div class="answer-text"><span class="thinking">Thinking…</span></div>' +
+                    '<div class="sources" style="display:none;"><h3>Based on</h3><div class="chips"></div></div>' +
+                '</div>';
+            thread.appendChild(turn);
+            input.value = "";
+            btn.disabled = true;
+
+            try {
+                const res = await fetch(API + "/ask", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ question: question, history: history })
+                });
+                const data = await res.json();
+
+                turn.querySelector(".answer-text").textContent = data.answer;
+
+                const sourcesWrap = turn.querySelector(".sources");
+                const chips = turn.querySelector(".chips");
+                chips.innerHTML = "";
+                if (data.source_codes && data.source_codes.length) {
+                    data.source_codes.forEach(code => {
+                        const chip = document.createElement("span");
+                        chip.className = "chip";
+                        chip.textContent = code;
+                        chip.title = "Ask about " + code;
+                        chip.onclick = () => ask("tell me about " + code);
+                        chips.appendChild(chip);
+                    });
+                    sourcesWrap.style.display = "block";
+                }
+
+                // Remember this turn so follow-ups have context.
+                history.push({ question: question, answer: data.answer });
+                document.getElementById("resetRow").classList.add("show");
+            } catch (e) {
+                turn.querySelector(".answer-text").textContent =
+                    "Something went wrong reaching the server. Make sure the backend is running.";
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function escapeHtml(s) {
+            const d = document.createElement("div");
+            d.textContent = s;
+            return d.innerHTML;
+        }
+
+        document.getElementById("question").addEventListener("keydown", e => {
+            if (e.key === "Enter") ask();
+        });
+    </script>
+</body>
+</html>
