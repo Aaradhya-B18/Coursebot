@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from google import genai
 from supabase import create_client
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 load_dotenv()
 
@@ -86,6 +87,9 @@ def find_codes(q: str):
 def looks_like_course_question(q: str) -> bool:
     return bool(find_codes(normalize_query(q)) or COURSE_WORDS.search(q))
 
+@app.get("/")
+def home():
+    return FileResponse("index.html")
 
 @app.post("/ask")
 def ask(req: AskRequest):

@@ -182,7 +182,7 @@
     </footer>
 
     <script>
-        const API = "http://localhost:8000";
+        const API = "";
         let history = [];   // [{question, answer}, ...] for the current thread
 
         function resetThread() {
@@ -245,7 +245,7 @@
                 document.getElementById("resetRow").classList.add("show");
             } catch (e) {
                 turn.querySelector(".answer-text").textContent =
-                    "Something went wrong reaching the server. Make sure the backend is running.";
+                    "Something went wrong reaching the server. Please try again in a moment.";
             } finally {
                 btn.disabled = false;
             }
