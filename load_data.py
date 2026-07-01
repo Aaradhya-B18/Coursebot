@@ -1,29 +1,38 @@
-import os 
+import os
 from dotenv import load_dotenv
-from sentence_transformers import SentenceTransformer
+from google import genai
 from supabase import create_client
 from data import courses
 
 load_dotenv()
 
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 supabase = create_client(
     os.getenv("SUPABASE_URL"),
     os.getenv("SUPABASE_KEY")
 )
 
-model = SentenceTransformer("all-MiniLM-L6-v2")
 
+def embed(text: str):
+    r = client.models.embed_content(
+        model="gemini-embedding-001",
+        contents=text,
+        config={"output_dimensionality": 768},
+    )
+    values = list(r.embeddings[0].values)
+    norm = sum(v * v for v in values) ** 0.5
+    return [v / norm for v in values]
+
+
+supabase.table("courses").delete().neq("id", 0).execute()
 
 for course in courses:
-    embedding = model.encode(course["text"]).tolist()
+    embedding = embed(course["text"])
     supabase.table("courses").insert({
-        "code":course["code"],
-        "text":course["text"],
-        "embedding":embedding
+        "code": course["code"],
+        "text": course["text"],
+        "embedding": embedding
     }).execute()
     print("Inserted", course["code"])
 
 print("All courses loaded successfully")
-
-
-

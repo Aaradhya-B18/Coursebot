@@ -5,18 +5,28 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from pydantic import BaseModel
 from google import genai
-from sentence_transformers import SentenceTransformer, util
 from supabase import create_client
 from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-model = SentenceTransformer("all-MiniLM-L6-v2")
 supabase = create_client(
     os.getenv("SUPABASE_URL"),
     os.getenv("SUPABASE_KEY")
 )
+
+
+def embed(text: str):
+    r = client.models.embed_content(
+        model="gemini-embedding-001",
+        contents=text,
+        config={"output_dimensionality": 768},
+    )
+    values = list(r.embeddings[0].values)
+    norm = sum(v * v for v in values) ** 0.5
+    return [v / norm for v in values]
+
 
 app = FastAPI()
 app.add_middleware(
@@ -58,7 +68,6 @@ COURSE_WORDS = re.compile(
 
 def is_greeting(q: str) -> bool:
     ql = q.lower().strip("?!. ")
-    # Must START with a trigger (or be exactly one) so "damn you are cool" won't match.
     return any(ql == t or ql.startswith(t + " ") for t in GREETING_TRIGGERS)
 
 
@@ -75,7 +84,6 @@ def find_codes(q: str):
 
 
 def looks_like_course_question(q: str) -> bool:
-    # A real course question either names a code or uses a course-y word.
     return bool(find_codes(normalize_query(q)) or COURSE_WORDS.search(q))
 
 
@@ -84,7 +92,6 @@ def ask(req: AskRequest):
     question = req.question
     history = req.history or []
 
-    # 0) Greeting / "what can I ask" -> friendly intro, skip the RAG pipeline.
     if is_greeting(question):
         intro = (
             "Hey there, Warrior! \U0001FAE1 I'm WatAsk \u2014 I give straight answers about "
@@ -99,9 +106,6 @@ def ask(req: AskRequest):
         )
         return {"question": question, "answer": intro, "source_codes": [], "sources": []}
 
-    # 0b) Not a greeting and not a course question -> it's chit-chat / off-topic.
-    #     Give a friendly nudge instead of a fake course answer. (Skip this if
-    #     we're mid-conversation, since short follow-ups may lack course words.)
     if not history and not looks_like_course_question(question):
         return {
             "question": question,
@@ -116,15 +120,12 @@ def ask(req: AskRequest):
 
     clean_question = normalize_query(question)
 
-    # 1) Build the SEARCH query. On a follow-up, a bare question like
-    #    "what about the advanced version?" embeds poorly on its own, so we
-    #    prepend the previous question to give retrieval enough context.
     if history:
         search_text = normalize_query(history[-1].question) + " " + clean_question
     else:
         search_text = clean_question
 
-    question_vector = model.encode(search_text).tolist()
+    question_vector = embed(search_text)
     result = supabase.rpc("match_courses", {
         "query_embedding": question_vector,
         "match_count": 4
@@ -138,7 +139,6 @@ def ask(req: AskRequest):
             sources.append({"code": code, "text": row["text"]})
             seen_codes.add(code)
 
-    # 2) Direct code lookup for any codes named in the current question.
     codes = find_codes(clean_question)
     for code in codes:
         exact = supabase.table("courses").select("code,text").eq("code", code).execute()
@@ -149,7 +149,6 @@ def ask(req: AskRequest):
 
     context = "\n\n".join(s["text"] for s in sources)
 
-    # 3) Build the prior-conversation block so follow-ups have context.
     convo = ""
     for turn in history:
         convo += f"Student: {turn.question}\nWatAsk: {turn.answer}\n\n"
